@@ -9,7 +9,6 @@ permissions:
   contents: write
 
 env:
-  # Điền các gói bạn cần tải, cách nhau bởi dấu cách
   MAXMIND_EDITIONS: "GeoLite2-City GeoLite2-Country GeoLite2-ASN"
   IP2LOCATION_CODES: "DB11LITEBINIPV6"
 
@@ -28,9 +27,12 @@ jobs:
           for edition in $MAXMIND_EDITIONS; do
             echo "Đang tải $edition..."
             curl -fsSL "https://download.maxmind.com/app/geoip_download?edition_id=${edition}&license_key=${LICENSE_KEY}&suffix=tar.gz" -o /tmp/maxmind.tar.gz
-            tar -xzf /tmp/maxmind.tar.gz --wildcards --no-anchored '*.mmdb' --strip-components=1 -C /tmp/geoip-dist/
+            
+            # Đặt -C /tmp/geoip-dist/ lên trước '*.mmdb' để giải nén đúng vào thư mục đích
+            tar -xzf /tmp/maxmind.tar.gz -C /tmp/geoip-dist/ --strip-components=1 --wildcards --no-anchored '*.mmdb'
             rm -f /tmp/maxmind.tar.gz
           done
+          ls -lh /tmp/geoip-dist/
 
       - name: Tải và giải nén IP2Location (.BIN)
         env:
@@ -52,7 +54,7 @@ jobs:
           done
           ls -lh /tmp/geoip-dist/
 
-      - name: Đăng tải toàn bộ file lên GitHub Releases (Hỗ trợ tới 2GB/file)
+      - name: Đăng tải toàn bộ file lên GitHub Releases
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -61,7 +63,7 @@ jobs:
             --title "Latest GeoIP & IP2Location ($(date -u +'%Y-%m-%d'))" \
             --notes "Cập nhật tự động định kỳ hàng tháng bằng GitHub Actions."
 
-      - name: Ghi log cập nhật nhẹ vào nhánh main (Giữ Cron luôn hoạt động)
+      - name: Ghi log cập nhật nhẹ vào nhánh main
         run: |
           echo "Last updated: $(date -u +'%Y-%m-%d %H:%M:%S UTC')" > last-updated.txt
           echo "" >> last-updated.txt
