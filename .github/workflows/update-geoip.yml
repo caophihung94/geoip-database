@@ -1,0 +1,85 @@
+name: Auto Update GeoIP & IP2Location
+
+on:
+  # Chạy tự động lúc 03:00 UTC ngày mùng 2 hàng tháng
+  schedule:
+    - cron: '0 3 2 * *'
+  # Cho phép bấm chạy thủ công ngay trên giao diện GitHub
+  workflow_dispatch:
+
+# Cấp quyền ghi để Action có thể commit file và tạo Release trên repo
+permissions:
+  contents: write
+
+env:
+  # Bạn có thể liệt kê nhiều gói cách nhau bởi dấu cách nếu muốn tải cùng lúc
+  MAXMIND_EDITIONS: "GeoLite2-City GeoLite2-Country GeoLite2-ASN"
+  IP2LOCATION_CODES: "DB11LITEBINIPV6" # Hoặc DB1LITEBIN, DB11LITEBIN...
+
+jobs:
+  update-databases:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Tải và giải nén MaxMind GeoIP (.mmdb)
+        env:
+          LICENSE_KEY: ${{ secrets.MAXMIND_LICENSE_KEY }}
+        run: |
+          mkdir -p data/geoip
+          for edition in $MAXMIND_EDITIONS; do
+            echo "Đang tải $edition..."
+            curl -fsSL "https://download.maxmind.com/app/geoip_download?edition_id=${edition}&license_key=${LICENSE_KEY}&suffix=tar.gz" -o maxmind.tar.gz
+            
+            # Giải nén chỉ lấy file .mmdb và bỏ qua thư mục con chứa ngày tháng
+            tar -xzf maxmind.tar.gz --wildcards --no-anchored '*.mmdb' --strip-components=1 -C data/geoip/
+            rm -f maxmind.tar.gz
+          done
+          ls -lh data/geoip/
+
+      - name: Tải và giải nén IP2Location (.BIN)
+        env:
+          TOKEN: ${{ secrets.IP2LOCATION_TOKEN }}
+        run: |
+          mkdir -p data/ip2location
+          for code in $IP2LOCATION_CODES; do
+            echo "Đang tải $code..."
+            curl -fsSL "https://www.ip2location.com/download/?token=${TOKEN}&file=${code}" -o ip2loc.zip
+            
+            # Kiểm tra xem file tải về có đúng định dạng ZIP không (tránh lỗi hết quota trả về text)
+            if ! file ip2loc.zip | grep -q "Zip archive"; then
+              echo "Lỗi: Phản hồi từ IP2Location không phải file ZIP:"
+              head -c 300 ip2loc.zip
+              exit 1
+            fi
+            
+            # Giải nén chỉ lấy file .BIN, làm phẳng thư mục (-j) và ghi đè (-o)
+            unzip -j -o ip2loc.zip "*.BIN" -d data/ip2location/
+            rm -f ip2loc.zip
+          done
+          ls -lh data/ip2location/
+
+      - name: Lưu vào nhánh Git (Không làm phình lịch sử .git)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          
+          # Tạo nhánh orphan tạm thời rồi ghi đè để repo không bị cộng dồn hàng trăm MB sau mỗi tháng
+          git checkout --orphan temp-branch
+          git add -A
+          git commit -m "chore: update GeoIP & IP2Location ($(date -u +'%Y-%m-%d'))"
+          git branch -M main
+          git push -f origin main
+
+      - name: Phát hành vào GitHub Releases (Tag cố định 'latest')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Xóa release/tag 'latest' cũ nếu có và tạo lại với bộ file mới nhất
+          gh release delete latest --yes --cleanup-tag || true
+          gh release create latest data/geoip/*.mmdb data/ip2location/*.BIN \
+            --title "Latest GeoIP & IP2Location Databases ($(date -u +'%Y-%m-%d'))" \
+            --notes "Cập nhật tự động định kỳ hàng tháng bằng GitHub Actions."
